@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ms">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Solat Tracker</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="top">
+      <div class="brand-mark">☾</div>
+      <div><p class="eyebrow">RUANG IBADAH BERSAMA</p><h1>My Solat Tracker</h1><p class="sub">Satu langkah kecil, setiap hari.</p></div>
+    </header>
+
+    <section id="setupNotice" class="notice hidden"></section>
+
+    <section id="authCard" class="panel auth-panel">
+      <h2>Selamat datang</h2>
+      <p class="muted">Log masuk menggunakan akaun yang telah didaftarkan dalam Supabase.</p>
+      <form id="loginForm" class="stack">
+        <label>Email<input id="email" type="email" autocomplete="username" required placeholder="nama@email.com"></label>
+        <label>Password<input id="password" type="password" autocomplete="current-password" required placeholder="Password akaun"></label>
+        <button type="submit">Log masuk</button>
+      </form>
+      <p id="authMessage" class="message" role="status"></p>
+      <p class="tiny">Akaun pengguna perlu dicipta terlebih dahulu di Supabase Authentication → Users dan ditambah ke jadual tracker_members.</p>
+    </section>
+
+    <section id="appView" class="hidden">
+      <div class="toolbar panel">
+        <div><p class="eyebrow">ASSALAMUALAIKUM</p><h2>Rekod kita</h2><p id="signedInAs" class="muted small"></p></div>
+        <button id="logoutBtn" class="secondary">Log keluar</button>
+      </div>
+
+      <section class="panel month-panel">
+        <div class="month-controls">
+          <button id="prevMonth" class="icon-btn" aria-label="Bulan sebelumnya">←</button>
+          <div class="month-title"><p class="eyebrow">PAPARAN BULAN</p><h2 id="monthLabel"></h2></div>
+          <button id="nextMonth" class="icon-btn" aria-label="Bulan seterusnya">→</button>
+        </div>
+        <div id="summary" class="summary-grid"></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Tarikh</th><th>Subuh</th><th>Zohor</th><th>Asar</th><th>Maghrib</th><th>Isyak</th></tr></thead>
+            <tbody id="prayerTable"></tbody>
+          </table>
+        </div>
+        <p class="tiny">Tekan status pada setiap waktu untuk menukar: Belum → Selesai → Tertinggal. Masa solat boleh diisi selepas memilih status.</p>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading"><div><p class="eyebrow">MUHASABAH</p><h2>Refleksi bulanan</h2></div><span class="soft-pill">Bersama</span></div>
+        <label>Catatan bulan ini<textarea id="notes" rows="3" placeholder="Apa yang berjalan baik bulan ini?"></textarea></label>
+        <label>Perkara yang ingin diperbaiki<textarea id="improvement" rows="3" placeholder="Satu langkah kecil untuk bulan seterusnya..."></textarea></label>
+        <button id="saveReflection">Simpan refleksi</button>
+        <p id="reflectionMessage" class="message" role="status"></p>
+      </section>
+      <footer>Direka untuk saling mengingatkan dengan lembut. 🌿</footer>
+    </section>
+  </main>
+</body>
+</html>
