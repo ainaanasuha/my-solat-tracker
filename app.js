@@ -148,7 +148,11 @@
       window.SUPABASE_ANON_KEY
     );
 
-    $("loginForm").addEventListener("submit", login);
+   $("loginForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  $("authMessage").textContent = "Butang ditekan, sedang cuba log masuk...";
+  login(event);
+});
     $("logoutBtn").addEventListener("click", logout);
     $("prevMonth").addEventListener("click", () => changeMonth(-1));
     $("nextMonth").addEventListener("click", () => changeMonth(1));
