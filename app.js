@@ -1,4 +1,4 @@
-
+```javascript
 (() => {
   "use strict";
 
@@ -12,27 +12,34 @@
 
   const $ = (id) => document.getElementById(id);
 
-  let supabaseClient = null;
+  let supabaseClient;
   let currentUser = null;
   let members = [];
   let selectedUserId = "";
   let monthDate = new Date();
   let entries = new Map();
-  let loading = false;
+  let loadingMonth = false;
+  let savingReflection = false;
 
   function showNotice(message) {
     const el = $("setupNotice");
-    if (el) {
-      el.textContent = message;
-      el.classList.remove("hidden");
-    } else {
-      console.error(message);
-    }
+    if (!el) return;
+    el.textContent = message;
+    el.classList.remove("hidden");
   }
 
-  function showAuthMessage(message) {
-    const el = $("authMessage");
-    if (el) el.textContent = message;
+  function hideNotice() {
+    $("setupNotice")?.classList.add("hidden");
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[ch]);
   }
 
   function dateKey(year, month, day) {
@@ -69,135 +76,100 @@
     };
   }
 
-  function escapeHtml(value) {
-    return String(value).replace(/[&<>"']/g, (ch) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    }[ch]));
+  function setMessage(id, message, isError = false) {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = message;
+    el.classList.toggle("error", isError);
   }
 
   async function init() {
-    try {
-      if (
-        !window.SUPABASE_URL ||
-        !window.SUPABASE_ANON_KEY ||
-        window.SUPABASE_URL.includes("PASTE_") ||
-        window.SUPABASE_ANON_KEY.includes("PASTE_")
-      ) {
-        showNotice("Semak config.js: Project URL dan anon/public key Supabase diperlukan.");
-        $("authCard")?.classList.remove("hidden");
-        return;
-      }
-
-      if (!window.supabase?.createClient) {
-        showNotice("Pustaka Supabase gagal dimuatkan. Semak internet dan muat semula halaman.");
-        return;
-      }
-
-      supabaseClient = window.supabase.createClient(
-        window.SUPABASE_URL,
-        window.SUPABASE_ANON_KEY
-      );
-
-      const loginForm = $("loginForm");
-      if (!loginForm) {
-        showNotice("Borang loginForm tidak dijumpai dalam HTML.");
-        return;
-      }
-
-      loginForm.addEventListener("submit", login);
-
-      $("logoutBtn")?.addEventListener("click", logout);
-      $("prevMonth")?.addEventListener("click", () => changeMonth(-1));
-      $("nextMonth")?.addEventListener("click", () => changeMonth(1));
-      $("saveReflection")?.addEventListener("click", saveReflection);
-
-      showAuthMessage("Sedia untuk log masuk.");
-
-      const { data, error } = await supabaseClient.auth.getSession();
-
-      if (error) {
-        showAuthMessage(`Gagal menyemak sesi: ${error.message}`);
-        return;
-      }
-
-      if (data.session) {
-        currentUser = data.session.user;
-        await enterApp();
-      } else {
-        $("authCard")?.classList.remove("hidden");
-      }
-
-      supabaseClient.auth.onAuthStateChange((_event, session) => {
-        setTimeout(async () => {
-          try {
-            if (session) {
-              currentUser = session.user;
-              await enterApp();
-            } else {
-              currentUser = null;
-              selectedUserId = "";
-              members = [];
-              entries.clear();
-              $("appView")?.classList.add("hidden");
-              $("authCard")?.classList.remove("hidden");
-            }
-          } catch (error) {
-            showNotice(`Ralat sesi: ${error.message}`);
-          }
-        }, 0);
-      });
-    } catch (error) {
-      showNotice(`Ralat memulakan aplikasi: ${error.message}`);
-      console.error(error);
+    if (
+      !window.SUPABASE_URL ||
+      !window.SUPABASE_ANON_KEY ||
+      window.SUPABASE_URL.includes("PASTE_") ||
+      window.SUPABASE_ANON_KEY.includes("PASTE_")
+    ) {
+      showNotice("Sila semak SUPABASE_URL dan SUPABASE_ANON_KEY dalam config.js.");
+      return;
     }
+
+    if (!window.supabase?.createClient) {
+      showNotice("Pustaka Supabase gagal dimuatkan. Semak internet dan refresh halaman.");
+      return;
+    }
+
+    supabaseClient = window.supabase.createClient(
+      window.SUPABASE_URL,
+      window.SUPABASE_ANON_KEY
+    );
+
+    $("loginForm").addEventListener("submit", login);
+    $("logoutBtn").addEventListener("click", logout);
+    $("prevMonth").addEventListener("click", () => changeMonth(-1));
+    $("nextMonth").addEventListener("click", () => changeMonth(1));
+    $("saveReflection").addEventListener("click", saveReflection);
+
+    const { data, error } = await supabaseClient.auth.getSession();
+
+    if (error) {
+      showNotice("Gagal menyemak sesi log masuk: " + error.message);
+      $("authCard").classList.remove("hidden");
+      return;
+    }
+
+    if (data.session?.user) {
+      currentUser = data.session.user;
+      await enterApp();
+    } else {
+      $("authCard").classList.remove("hidden");
+    }
+
+    supabaseClient.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        currentUser = null;
+        selectedUserId = "";
+        entries.clear();
+        $("appView").classList.add("hidden");
+        $("authCard").classList.remove("hidden");
+        return;
+      }
+
+      if (session?.user && !currentUser) {
+        currentUser = session.user;
+        // Elak operasi Supabase bersarang dalam callback auth.
+        Promise.resolve().then(() => enterApp());
+      }
+    });
   }
 
   async function login(event) {
     event.preventDefault();
 
-    const form = $("loginForm");
-    const button = form?.querySelector('button[type="submit"]');
-    const email = $("email")?.value.trim();
-    const password = $("password")?.value;
-
     if (!supabaseClient) {
-      showAuthMessage("Supabase belum disediakan. Semak config.js.");
+      setMessage("authMessage", "Supabase belum bersedia. Refresh halaman.", true);
       return;
     }
 
-    if (!email || !password) {
-      showAuthMessage("Masukkan email dan kata laluan.");
+    const email = $("email").value.trim();
+    const password = $("password").value;
+
+    setMessage("authMessage", "Sedang log masuk...");
+
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email,
+      password
+    });
+
+    if (error) {
+      setMessage("authMessage", "Log masuk gagal: " + error.message, true);
       return;
     }
 
-    if (button) button.disabled = true;
-    showAuthMessage("Sedang log masuk...");
+    currentUser = data.user;
+    setMessage("authMessage", "Log masuk berjaya.");
 
-    try {
-      const { data, error } = await supabaseClient.auth.signInWithPassword({
-        email,
-        password
-      });
-
-      if (error) {
-        showAuthMessage(`Tak berjaya log masuk: ${error.message}`);
-        return;
-      }
-
-      currentUser = data.user;
-      showAuthMessage("Berjaya log masuk.");
-
-      await enterApp();
-    } catch (error) {
-      showAuthMessage(`Ralat log masuk: ${error.message}`);
-      console.error("Login error:", error);
-    } finally {
-      if (button) button.disabled = false;
-    }
+    await enterApp();
   }
 
   async function logout() {
@@ -206,55 +178,62 @@
     const { error } = await supabaseClient.auth.signOut();
 
     if (error) {
-      showNotice(`Gagal log keluar: ${error.message}`);
+      showNotice("Gagal log keluar: " + error.message);
       return;
     }
 
     currentUser = null;
     selectedUserId = "";
-    members = [];
     entries.clear();
 
-    $("appView")?.classList.add("hidden");
-    $("authCard")?.classList.remove("hidden");
-    if ($("password")) $("password").value = "";
-    showAuthMessage("");
+    $("appView").classList.add("hidden");
+    $("authCard").classList.remove("hidden");
+    $("password").value = "";
+    setMessage("authMessage", "Anda telah log keluar.");
   }
 
   async function enterApp() {
-    $("authCard")?.classList.add("hidden");
-    $("appView")?.classList.remove("hidden");
+    if (!currentUser) return;
 
-    if ($("signedInAs")) {
-      $("signedInAs").textContent = currentUser?.email || "Akaun berdaftar";
+    hideNotice();
+    $("authCard").classList.add("hidden");
+    $("appView").classList.remove("hidden");
+    $("signedInAs").textContent = currentUser.email || "Akaun berdaftar";
+
+    try {
+      await setupUserPicker();
+      await loadMonth();
+    } catch (error) {
+      showNotice("Ralat membuka tracker: " + (error.message || error));
+      $("prayerTable").innerHTML =
+        '<tr><td colspan="6" class="empty">Tidak dapat memuatkan data. Semak mesej ralat di atas.</td></tr>';
     }
-
-    await setupUserPicker();
   }
 
   async function setupUserPicker() {
-    const appView = $("appView");
-    if (!appView || !currentUser) return;
-
     let picker = $("recordUser");
 
     if (!picker) {
-      picker = document.createElement("select");
-      picker.id = "recordUser";
-      picker.setAttribute("aria-label", "Pilih rekod pengguna");
+      const toolbar = document.querySelector("#appView .toolbar");
+      if (!toolbar) {
+        throw new Error("Bahagian toolbar tidak ditemui dalam index.html.");
+      }
 
-      const wrapper = document.createElement("div");
-      wrapper.className = "panel";
-      const label = document.createElement("label");
-      label.textContent = "Rekod untuk: ";
-      label.appendChild(picker);
-      wrapper.appendChild(label);
+      const wrapper = document.createElement("label");
+      wrapper.id = "recordUserWrapper";
+      wrapper.className = "member-picker";
+      wrapper.innerHTML =
+        'Pilih rekod <select id="recordUser"><option value="">Memuatkan...</option></select>';
 
-      appView.prepend(wrapper);
+      toolbar.appendChild(wrapper);
+      picker = $("recordUser");
     }
 
-    picker.disabled = true;
-    picker.innerHTML = '<option value="">Memuatkan pengguna...</option>';
+    picker.onchange = async () => {
+      selectedUserId = picker.value;
+      entries.clear();
+      await loadMonth();
+    };
 
     const { data, error } = await supabaseClient
       .from("tracker_members")
@@ -263,42 +242,34 @@
       .order("display_name");
 
     if (error) {
-      picker.innerHTML = '<option value="">Gagal memuatkan pengguna</option>';
-      showNotice(`Tak dapat memuatkan tracker_members: ${error.message}`);
+      picker.innerHTML = '<option value="">Senarai pengguna gagal dimuatkan</option>';
+      showNotice(
+        "Tak dapat membaca tracker_members: " + error.message +
+        ". Semak polisi RLS untuk jadual tracker_members."
+      );
       return;
     }
 
-    members = data || [];
-    picker.innerHTML = "";
+    members = (data || []).filter((m) => m.user_id && m.display_name);
 
     if (!members.length) {
-      picker.innerHTML = '<option value="">Tiada pengguna tersedia</option>';
-      showNotice("Pastikan tracker_members mempunyai nama dan user_id yang betul.");
+      picker.innerHTML = '<option value="">Tiada pengguna berdaftar</option>';
+      showNotice(
+        "Tiada ahli dijumpai. Pastikan Ainaa dan Muaz telah ditambah ke tracker_members."
+      );
       return;
     }
 
-    members.forEach((member) => {
-      const option = document.createElement("option");
-      option.value = member.user_id;
-      option.textContent = member.display_name;
-      picker.appendChild(option);
-    });
-
     const previousId = selectedUserId;
+    picker.innerHTML = members.map((m) =>
+      `<option value="${escapeHtml(m.user_id)}">${escapeHtml(m.display_name)}</option>`
+    ).join("");
+
     selectedUserId = members.some((m) => m.user_id === previousId)
       ? previousId
       : members[0].user_id;
 
     picker.value = selectedUserId;
-    picker.disabled = false;
-
-    picker.onchange = async () => {
-      selectedUserId = picker.value;
-      entries.clear();
-      await loadMonth();
-    };
-
-    await loadMonth();
   }
 
   function changeMonth(delta) {
@@ -311,34 +282,25 @@
   }
 
   async function loadMonth() {
-    if (!supabaseClient || !selectedUserId || loading) return;
+    if (!supabaseClient || !selectedUserId || loadingMonth) return;
 
-    loading = true;
+    loadingMonth = true;
+    $("monthLabel").textContent = monthLabel();
+    $("prayerTable").innerHTML =
+      '<tr><td colspan="6" class="empty">Memuatkan rekod...</td></tr>';
+
+    const first = dateKey(monthDate.getFullYear(), monthDate.getMonth(), 1);
+    const last = dateKey(monthDate.getFullYear(), monthDate.getMonth(), daysInMonth());
 
     try {
-      if ($("monthLabel")) $("monthLabel").textContent = monthLabel();
-
-      const tbody = $("prayerTable");
-      if (tbody) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty">Memuatkan rekod...</td></tr>';
-      }
-
-      const first = dateKey(monthDate.getFullYear(), monthDate.getMonth(), 1);
-      const last = dateKey(monthDate.getFullYear(), monthDate.getMonth(), daysInMonth());
-
       const { data, error } = await supabaseClient
         .from("prayer_entries")
-        .select("user_id, prayer_date, prayer_name, status, prayed_at")
+        .select("id,user_id,prayer_date,prayer_name,status,prayed_at")
         .eq("user_id", selectedUserId)
         .gte("prayer_date", first)
         .lte("prayer_date", last);
 
-      if (error) {
-        if (tbody) {
-          tbody.innerHTML = `<tr><td colspan="6" class="empty">Ralat memuatkan rekod: ${escapeHtml(error.message)}</td></tr>`;
-        }
-        return;
-      }
+      if (error) throw error;
 
       entries = new Map(
         (data || []).map((row) => [
@@ -350,101 +312,89 @@
       renderTable();
       renderSummary();
       await loadReflection();
+      hideNotice();
     } catch (error) {
-      showNotice(`Ralat memuatkan bulan: ${error.message}`);
-      console.error(error);
+      $("prayerTable").innerHTML =
+        `<tr><td colspan="6" class="empty">Ralat memuatkan rekod: ${escapeHtml(error.message || error)}</td></tr>`;
+      showNotice(
+        "Gagal memuatkan rekod solat. Semak akses RLS prayer_entries: " +
+        (error.message || error)
+      );
     } finally {
-      loading = false;
+      loadingMonth = false;
     }
   }
 
   function renderTable() {
-    const tbody = $("prayerTable");
-    if (!tbody) return;
-
-    tbody.innerHTML = "";
+    const rows = [];
 
     for (let day = 1; day <= daysInMonth(); day++) {
       const date = dateKey(monthDate.getFullYear(), monthDate.getMonth(), day);
-      const tr = document.createElement("tr");
-      const tdDate = document.createElement("td");
-
-      tdDate.textContent = new Intl.DateTimeFormat("ms-MY", {
+      const dateObj = new Date(monthDate.getFullYear(), monthDate.getMonth(), day);
+      const dateText = new Intl.DateTimeFormat("ms-MY", {
         day: "numeric",
+        month: "short",
         weekday: "short"
-      }).format(new Date(monthDate.getFullYear(), monthDate.getMonth(), day));
+      }).format(dateObj);
 
-      tr.appendChild(tdDate);
+      rows.push(`<tr>
+        <td class="date-cell">${escapeHtml(dateText)}</td>
+        ${prayers.map((prayer) => {
+          const entry = currentEntry(date, prayer);
+          const status = statusOrder.includes(entry.status) ? entry.status : "pending";
+          const time = entry.prayed_at || "";
 
-      prayers.forEach((prayer) => {
-        const td = document.createElement("td");
-        const entry = currentEntry(date, prayer);
-
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = `status-btn ${entry.status === "done" ? "status-done" : entry.status === "missed" ? "status-missed" : ""}`;
-        btn.textContent = statusLabels[entry.status] || "Belum";
-        btn.title = "Tekan untuk tukar status";
-
-        btn.addEventListener("click", async () => {
-          const next = statusOrder[
-            (statusOrder.indexOf(entry.status) + 1) % statusOrder.length
-          ];
-
-          btn.disabled = true;
-          const saved = await savePrayer(date, prayer, next, entry.prayed_at || "");
-
-          if (saved) {
-            entries.set(entryKey(date, prayer), {
-              user_id: selectedUserId,
-              prayer_date: date,
-              prayer_name: prayer,
-              status: next,
-              prayed_at: entry.prayed_at || null
-            });
-            renderTable();
-            renderSummary();
-          } else {
-            btn.disabled = false;
-          }
-        });
-
-        td.appendChild(btn);
-
-        const time = document.createElement("input");
-        time.type = "time";
-        time.className = "time-input";
-        time.value = (entry.prayed_at || "").slice(0, 5);
-        time.setAttribute("aria-label", `Masa ${prayer} ${date}`);
-
-        time.addEventListener("change", async () => {
-          const saved = await savePrayer(date, prayer, entry.status, time.value);
-          if (saved) {
-            entries.set(entryKey(date, prayer), {
-              user_id: selectedUserId,
-              prayer_date: date,
-              prayer_name: prayer,
-              status: entry.status,
-              prayed_at: time.value || null
-            });
-          }
-        });
-
-        td.appendChild(time);
-        tr.appendChild(td);
-      });
-
-      tbody.appendChild(tr);
+          return `<td class="prayer-cell">
+            <button
+              type="button"
+              class="status-btn status-${status}"
+              data-date="${date}"
+              data-prayer="${prayer}"
+              aria-label="${prayer}: ${statusLabels[status]}"
+            >${statusLabels[status]}</button>
+            <input
+              class="time-input"
+              type="time"
+              aria-label="Masa ${prayer}, ${date}"
+              data-time-date="${date}"
+              data-time-prayer="${prayer}"
+              value="${escapeHtml(time)}"
+            >
+          </td>`;
+        }).join("")}
+      </tr>`);
     }
+
+    $("prayerTable").innerHTML = rows.join("");
+
+    $("prayerTable").querySelectorAll(".status-btn").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const { date, prayer } = button.dataset;
+        const current = currentEntry(date, prayer);
+        const index = statusOrder.indexOf(current.status);
+        const nextStatus = statusOrder[(index + 1) % statusOrder.length];
+
+        await savePrayer(date, prayer, nextStatus, current.prayed_at || "");
+      });
+    });
+
+    $("prayerTable").querySelectorAll(".time-input").forEach((input) => {
+      input.addEventListener("change", async () => {
+        const { timeDate: date, timePrayer: prayer } = input.dataset;
+        const current = currentEntry(date, prayer);
+
+        await savePrayer(date, prayer, current.status || "pending", input.value);
+      });
+    });
   }
 
   async function savePrayer(date, prayer, status, time) {
     if (!selectedUserId) {
-      alert("Pilih pengguna dahulu.");
-      return false;
+      showNotice("Pilih Ainaa atau Muaz dahulu.");
+      return;
     }
 
-    const row = {
+    const payload = {
       user_id: selectedUserId,
       prayer_date: date,
       prayer_name: prayer,
@@ -452,73 +402,123 @@
       prayed_at: time || null
     };
 
-    const { error } = await supabaseClient
-      .from("prayer_entries")
-      .upsert(row, {
-        onConflict: "user_id,prayer_date,prayer_name"
-      });
-
-    if (error) {
-      alert(`Tak dapat simpan rekod: ${error.message}`);
-      return false;
-    }
-
-    return true;
-  }
-
-  async function loadReflection() {
-    if (!$("reflectionMessage")) return;
-
-    $("reflectionMessage").textContent = "";
-
     const { data, error } = await supabaseClient
-      .from("monthly_reflections")
-      .select("notes, improvement")
-      .eq("month", monthKey())
-      .maybeSingle();
+      .from("prayer_entries")
+      .upsert(payload, {
+        onConflict: "user_id,prayer_date,prayer_name"
+      })
+      .select("id,user_id,prayer_date,prayer_name,status,prayed_at")
+      .single();
 
     if (error) {
-      $("reflectionMessage").textContent = `Tak dapat memuatkan refleksi: ${error.message}`;
+      showNotice("Gagal menyimpan solat: " + error.message);
       return;
     }
 
-    if ($("notes")) $("notes").value = data?.notes || "";
-    if ($("improvement")) $("improvement").value = data?.improvement || "";
+    entries.set(entryKey(date, prayer), data);
+    renderTable();
+    renderSummary();
+    hideNotice();
+  }
+
+  function renderSummary() {
+    const total = daysInMonth() * prayers.length;
+    let done = 0;
+    let missed = 0;
+    let pending = 0;
+
+    for (let day = 1; day <= daysInMonth(); day++) {
+      const date = dateKey(monthDate.getFullYear(), monthDate.getMonth(), day);
+
+      for (const prayer of prayers) {
+        const status = currentEntry(date, prayer).status;
+        if (status === "done") done++;
+        else if (status === "missed") missed++;
+        else pending++;
+      }
+    }
+
+    const percent = total ? Math.round((done / total) * 100) : 0;
+
+    $("summary").innerHTML = `
+      <div class="summary-card">
+        <span class="summary-label">Selesai</span>
+        <strong>${done}</strong>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">Tertinggal</span>
+        <strong>${missed}</strong>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">Belum</span>
+        <strong>${pending}</strong>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">Kemajuan</span>
+        <strong>${percent}%</strong>
+      </div>
+    `;
+  }
+
+  async function loadReflection() {
+    const notes = $("notes");
+    const improvement = $("improvement");
+    notes.value = "";
+    improvement.value = "";
+    setMessage("reflectionMessage", "");
+
+    // Refleksi kekal dikongsi mengikut reka bentuk asal.
+    const { data, error } = await supabaseClient
+      .from("monthly_reflections")
+      .select("*")
+      .eq("month_start", monthKey())
+      .maybeSingle();
+
+    if (error) {
+      setMessage("reflectionMessage", "Gagal memuatkan refleksi: " + error.message, true);
+      return;
+    }
+
+    if (data) {
+      notes.value = data.notes || "";
+      improvement.value = data.improvement || "";
+    }
   }
 
   async function saveReflection() {
-    const button = $("saveReflection");
-    if (!button) return;
+    if (savingReflection) return;
+    savingReflection = true;
 
+    const button = $("saveReflection");
     button.disabled = true;
-    if ($("reflectionMessage")) {
-      $("reflectionMessage").textContent = "Menyimpan...";
-    }
+    setMessage("reflectionMessage", "Sedang menyimpan...");
 
     try {
+      const payload = {
+        month_start: monthKey(),
+        notes: $("notes").value.trim(),
+        improvement: $("improvement").value.trim()
+      };
+
       const { error } = await supabaseClient
         .from("monthly_reflections")
-        .upsert({
-          month: monthKey(),
-          notes: $("notes")?.value || "",
-          improvement: $("improvement")?.value || ""
-        }, {
-          onConflict: "month"
-        });
+        .upsert(payload, { onConflict: "month_start" });
 
-      if ($("reflectionMessage")) {
-        $("reflectionMessage").textContent = error
-          ? `Tak berjaya simpan: ${error.message}`
-          : "Refleksi berjaya disimpan. 💚";
-      }
+      if (error) throw error;
+
+      setMessage("reflectionMessage", "Refleksi berjaya disimpan.");
     } catch (error) {
-      if ($("reflectionMessage")) {
-        $("reflectionMessage").textContent = `Ralat: ${error.message}`;
-      }
+      setMessage(
+        "reflectionMessage",
+        "Gagal menyimpan refleksi: " + (error.message || error),
+        true
+      );
     } finally {
+      savingReflection = false;
       button.disabled = false;
     }
   }
 
   document.addEventListener("DOMContentLoaded", init);
 })();
+```
