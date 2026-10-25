@@ -2,230 +2,193 @@
 (() => {
   "use strict";
 
-  const prayers = ["Subuh", "Zohor", "Asar", "Maghrib", "Isyak"];
-  const statusOrder = ["pending", "done", "missed"];
-  const statusLabels = {
+  const PRAYERS = ["Subuh", "Zohor", "Asar", "Maghrib", "Isyak"];
+  const STATUSES = ["pending", "done", "missed"];
+  const LABELS = {
     pending: "Belum",
     done: "Selesai",
     missed: "Tertinggal"
   };
 
-  const $ = (id) => document.getElementById(id);
+  const $ = id => document.getElementById(id);
 
-  let supabaseClient;
-  let currentUser = null;
+  let db = null;
+  let user = null;
   let members = [];
   let selectedUserId = "";
-  let monthDate = new Date();
+  let month = new Date();
   let entries = new Map();
-  let loadingMonth = false;
-  let savingReflection = false;
+  let loading = false;
+  let operation = 0;
 
-  function showNotice(message) {
-    const el = $("setupNotice");
-    if (!el) return;
-    el.textContent = message;
-    el.classList.remove("hidden");
-  }
+  const key = (date, prayer) => `${date}|${prayer}`;
 
-  function hideNotice() {
-    $("setupNotice")?.classList.add("hidden");
-  }
-
-  function escapeHtml(value) {
-    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
-      "&": "&amp;",
-      "<": "&lt;",
-      ">": "&gt;",
-      '"': "&quot;",
-      "'": "&#39;"
-    })[ch]);
-  }
-
-  function dateKey(year, month, day) {
-    return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  function dateKey(y, m, d) {
+    return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   }
 
   function monthKey() {
-    return `${monthDate.getFullYear()}-${String(monthDate.getMonth() + 1).padStart(2, "0")}-01`;
+    return dateKey(month.getFullYear(), month.getMonth(), 1);
   }
 
   function monthLabel() {
     return new Intl.DateTimeFormat("ms-MY", {
       month: "long",
       year: "numeric"
-    }).format(monthDate);
+    }).format(month);
   }
 
   function daysInMonth() {
-    return new Date(
-      monthDate.getFullYear(),
-      monthDate.getMonth() + 1,
-      0
-    ).getDate();
+    return new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
   }
 
-  function entryKey(date, prayer) {
-    return `${date}|${prayer}`;
+  function escape(value) {
+    return String(value ?? "").replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;",
+      '"': "&quot;", "'": "&#39;"
+    })[c]);
+  }
+
+  function notice(message) {
+    const el = $("setupNotice");
+    if (el) {
+      el.textContent = message;
+      el.classList.remove("hidden");
+    }
+  }
+
+  function clearNotice() {
+    $("setupNotice")?.classList.add("hidden");
+  }
+
+  function message(id, text) {
+    const el = $(id);
+    if (el) el.textContent = text;
   }
 
   function currentEntry(date, prayer) {
-    return entries.get(entryKey(date, prayer)) || {
+    return entries.get(key(date, prayer)) || {
       status: "pending",
       prayed_at: ""
     };
   }
 
-  function setMessage(id, message, isError = false) {
-    const el = $(id);
-    if (!el) return;
-    el.textContent = message;
-    el.classList.toggle("error", isError);
-  }
-
   async function init() {
-    if (
-      !window.SUPABASE_URL ||
-      !window.SUPABASE_ANON_KEY ||
-      window.SUPABASE_URL.includes("PASTE_") ||
-      window.SUPABASE_ANON_KEY.includes("PASTE_")
-    ) {
-      showNotice("Sila semak SUPABASE_URL dan SUPABASE_ANON_KEY dalam config.js.");
-      return;
-    }
-
-    if (!window.supabase?.createClient) {
-      showNotice("Pustaka Supabase gagal dimuatkan. Semak internet dan refresh halaman.");
-      return;
-    }
-
-    supabaseClient = window.supabase.createClient(
-      window.SUPABASE_URL,
-      window.SUPABASE_ANON_KEY
-    );
-
     $("loginForm").addEventListener("submit", login);
     $("logoutBtn").addEventListener("click", logout);
     $("prevMonth").addEventListener("click", () => changeMonth(-1));
     $("nextMonth").addEventListener("click", () => changeMonth(1));
     $("saveReflection").addEventListener("click", saveReflection);
 
-    const { data, error } = await supabaseClient.auth.getSession();
-
-    if (error) {
-      showNotice("Gagal menyemak sesi log masuk: " + error.message);
-      $("authCard").classList.remove("hidden");
+    if (!window.SUPABASE_URL || !window.SUPABASE_ANON_KEY) {
+      notice("config.js tidak mempunyai SUPABASE_URL atau SUPABASE_ANON_KEY.");
       return;
     }
 
-    if (data.session?.user) {
-      currentUser = data.session.user;
-      await enterApp();
-    } else {
-      $("authCard").classList.remove("hidden");
+    if (!window.supabase || !window.supabase.createClient) {
+      notice("Supabase gagal dimuatkan. Semak sambungan internet dan refresh halaman.");
+      return;
     }
 
-    supabaseClient.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_OUT") {
-        currentUser = null;
-        selectedUserId = "";
-        entries.clear();
-        $("appView").classList.add("hidden");
-        $("authCard").classList.remove("hidden");
-        return;
-      }
+    try {
+      db = window.supabase.createClient(
+        window.SUPABASE_URL,
+        window.SUPABASE_ANON_KEY
+      );
 
-      if (session?.user && !currentUser) {
-        currentUser = session.user;
-        // Elak operasi Supabase bersarang dalam callback auth.
-        Promise.resolve().then(() => enterApp());
+      const { data, error } = await db.auth.getSession();
+      if (error) throw error;
+
+      if (data.session?.user) {
+        user = data.session.user;
+        await openTracker();
+      } else {
+        $("authCard").classList.remove("hidden");
       }
-    });
+    } catch (e) {
+      notice("Ralat memulakan aplikasi: " + e.message);
+      $("authCard").classList.remove("hidden");
+    }
   }
 
   async function login(event) {
     event.preventDefault();
 
-    if (!supabaseClient) {
-      setMessage("authMessage", "Supabase belum bersedia. Refresh halaman.", true);
+    if (!db) {
+      message("authMessage", "Supabase belum tersedia. Refresh halaman.");
       return;
     }
 
-    const email = $("email").value.trim();
-    const password = $("password").value;
+    const button = $("loginForm").querySelector('button[type="submit"]');
+    button.disabled = true;
+    message("authMessage", "Sedang log masuk...");
+    clearNotice();
 
-    setMessage("authMessage", "Sedang log masuk...");
+    try {
+      const { data, error } = await db.auth.signInWithPassword({
+        email: $("email").value.trim(),
+        password: $("password").value
+      });
 
-    const { data, error } = await supabaseClient.auth.signInWithPassword({
-      email,
-      password
-    });
+      if (error) throw error;
+      if (!data.user) throw new Error("Akaun pengguna tidak ditemui.");
 
-    if (error) {
-      setMessage("authMessage", "Log masuk gagal: " + error.message, true);
-      return;
+      user = data.user;
+      message("authMessage", "Log masuk berjaya.");
+      await openTracker();
+    } catch (e) {
+      message("authMessage", "Log masuk gagal: " + e.message);
+    } finally {
+      button.disabled = false;
     }
-
-    currentUser = data.user;
-    setMessage("authMessage", "Log masuk berjaya.");
-
-    await enterApp();
   }
 
   async function logout() {
-    if (!supabaseClient) return;
-
-    const { error } = await supabaseClient.auth.signOut();
-
-    if (error) {
-      showNotice("Gagal log keluar: " + error.message);
-      return;
-    }
-
-    currentUser = null;
-    selectedUserId = "";
-    entries.clear();
-
-    $("appView").classList.add("hidden");
-    $("authCard").classList.remove("hidden");
-    $("password").value = "";
-    setMessage("authMessage", "Anda telah log keluar.");
-  }
-
-  async function enterApp() {
-    if (!currentUser) return;
-
-    hideNotice();
-    $("authCard").classList.add("hidden");
-    $("appView").classList.remove("hidden");
-    $("signedInAs").textContent = currentUser.email || "Akaun berdaftar";
+    if (!db) return;
 
     try {
-      await setupUserPicker();
-      await loadMonth();
-    } catch (error) {
-      showNotice("Ralat membuka tracker: " + (error.message || error));
-      $("prayerTable").innerHTML =
-        '<tr><td colspan="6" class="empty">Tidak dapat memuatkan data. Semak mesej ralat di atas.</td></tr>';
+      const { error } = await db.auth.signOut();
+      if (error) throw error;
+
+      user = null;
+      selectedUserId = "";
+      entries.clear();
+
+      $("appView").classList.add("hidden");
+      $("authCard").classList.remove("hidden");
+      $("password").value = "";
+      message("authMessage", "Anda telah log keluar.");
+      clearNotice();
+    } catch (e) {
+      notice("Gagal log keluar: " + e.message);
     }
   }
 
-  async function setupUserPicker() {
+  async function openTracker() {
+    $("authCard").classList.add("hidden");
+    $("appView").classList.remove("hidden");
+    $("signedInAs").textContent = user?.email || "Akaun berdaftar";
+
+    try {
+      await setupMemberPicker();
+      if (selectedUserId) await loadMonth();
+    } catch (e) {
+      notice("Gagal membuka tracker: " + e.message);
+    }
+  }
+
+  async function setupMemberPicker() {
     let picker = $("recordUser");
 
     if (!picker) {
       const toolbar = document.querySelector("#appView .toolbar");
-      if (!toolbar) {
-        throw new Error("Bahagian toolbar tidak ditemui dalam index.html.");
-      }
-
-      const wrapper = document.createElement("label");
-      wrapper.id = "recordUserWrapper";
-      wrapper.className = "member-picker";
-      wrapper.innerHTML =
-        'Pilih rekod <select id="recordUser"><option value="">Memuatkan...</option></select>';
-
-      toolbar.appendChild(wrapper);
+      const label = document.createElement("label");
+      label.id = "recordUserLabel";
+      label.style.display = "block";
+      label.style.marginTop = "12px";
+      label.innerHTML =
+        'Rekod untuk <select id="recordUser"><option value="">Memuatkan ahli...</option></select>';
+      toolbar.appendChild(label);
       picker = $("recordUser");
     }
 
@@ -235,65 +198,54 @@
       await loadMonth();
     };
 
-    const { data, error } = await supabaseClient
+    const { data, error } = await db
       .from("tracker_members")
-      .select("user_id, display_name")
+      .select("user_id,display_name")
       .not("user_id", "is", null)
       .order("display_name");
 
     if (error) {
-      picker.innerHTML = '<option value="">Senarai pengguna gagal dimuatkan</option>';
-      showNotice(
-        "Tak dapat membaca tracker_members: " + error.message +
-        ". Semak polisi RLS untuk jadual tracker_members."
-      );
-      return;
+      throw new Error("Tidak dapat membaca tracker_members: " + error.message);
     }
 
-    members = (data || []).filter((m) => m.user_id && m.display_name);
+    members = (data || []).filter(m => m.user_id && m.display_name);
 
     if (!members.length) {
-      picker.innerHTML = '<option value="">Tiada pengguna berdaftar</option>';
-      showNotice(
-        "Tiada ahli dijumpai. Pastikan Ainaa dan Muaz telah ditambah ke tracker_members."
-      );
+      picker.innerHTML = '<option value="">Tiada ahli ditemui</option>';
+      selectedUserId = "";
+      notice("Tambah Ainaa dan Muaz ke tracker_members, termasuk user_id mereka.");
       return;
     }
 
-    const previousId = selectedUserId;
-    picker.innerHTML = members.map((m) =>
-      `<option value="${escapeHtml(m.user_id)}">${escapeHtml(m.display_name)}</option>`
+    picker.innerHTML = members.map(m =>
+      `<option value="${escape(m.user_id)}">${escape(m.display_name)}</option>`
     ).join("");
 
-    selectedUserId = members.some((m) => m.user_id === previousId)
-      ? previousId
-      : members[0].user_id;
-
+    if (!members.some(m => m.user_id === selectedUserId)) {
+      selectedUserId = members[0].user_id;
+    }
     picker.value = selectedUserId;
   }
 
   function changeMonth(delta) {
-    monthDate = new Date(
-      monthDate.getFullYear(),
-      monthDate.getMonth() + delta,
-      1
-    );
+    month = new Date(month.getFullYear(), month.getMonth() + delta, 1);
     loadMonth();
   }
 
   async function loadMonth() {
-    if (!supabaseClient || !selectedUserId || loadingMonth) return;
+    if (!db || !selectedUserId || loading) return;
 
-    loadingMonth = true;
+    loading = true;
+    const thisOperation = ++operation;
     $("monthLabel").textContent = monthLabel();
     $("prayerTable").innerHTML =
       '<tr><td colspan="6" class="empty">Memuatkan rekod...</td></tr>';
 
-    const first = dateKey(monthDate.getFullYear(), monthDate.getMonth(), 1);
-    const last = dateKey(monthDate.getFullYear(), monthDate.getMonth(), daysInMonth());
+    const first = dateKey(month.getFullYear(), month.getMonth(), 1);
+    const last = dateKey(month.getFullYear(), month.getMonth(), daysInMonth());
 
     try {
-      const { data, error } = await supabaseClient
+      const { data, error } = await db
         .from("prayer_entries")
         .select("id,user_id,prayer_date,prayer_name,status,prayed_at")
         .eq("user_id", selectedUserId)
@@ -301,10 +253,11 @@
         .lte("prayer_date", last);
 
       if (error) throw error;
+      if (thisOperation !== operation) return;
 
       entries = new Map(
-        (data || []).map((row) => [
-          entryKey(row.prayer_date, row.prayer_name),
+        (data || []).map(row => [
+          key(row.prayer_date, row.prayer_name),
           row
         ])
       );
@@ -312,85 +265,70 @@
       renderTable();
       renderSummary();
       await loadReflection();
-      hideNotice();
-    } catch (error) {
+      clearNotice();
+    } catch (e) {
       $("prayerTable").innerHTML =
-        `<tr><td colspan="6" class="empty">Ralat memuatkan rekod: ${escapeHtml(error.message || error)}</td></tr>`;
-      showNotice(
-        "Gagal memuatkan rekod solat. Semak akses RLS prayer_entries: " +
-        (error.message || error)
-      );
+        `<tr><td colspan="6" class="empty">Ralat: ${escape(e.message)}</td></tr>`;
+      notice("Gagal memuatkan rekod solat: " + e.message);
     } finally {
-      loadingMonth = false;
+      loading = false;
     }
   }
 
   function renderTable() {
-    const rows = [];
+    const html = [];
 
     for (let day = 1; day <= daysInMonth(); day++) {
-      const date = dateKey(monthDate.getFullYear(), monthDate.getMonth(), day);
-      const dateObj = new Date(monthDate.getFullYear(), monthDate.getMonth(), day);
+      const date = dateKey(month.getFullYear(), month.getMonth(), day);
       const dateText = new Intl.DateTimeFormat("ms-MY", {
+        weekday: "short",
         day: "numeric",
-        month: "short",
-        weekday: "short"
-      }).format(dateObj);
+        month: "short"
+      }).format(new Date(month.getFullYear(), month.getMonth(), day));
 
-      rows.push(`<tr>
-        <td class="date-cell">${escapeHtml(dateText)}</td>
-        ${prayers.map((prayer) => {
+      html.push(`<tr>
+        <td>${escape(dateText)}</td>
+        ${PRAYERS.map(prayer => {
           const entry = currentEntry(date, prayer);
-          const status = statusOrder.includes(entry.status) ? entry.status : "pending";
-          const time = entry.prayed_at || "";
-
-          return `<td class="prayer-cell">
-            <button
-              type="button"
+          const status = STATUSES.includes(entry.status) ? entry.status : "pending";
+          return `<td>
+            <button type="button"
               class="status-btn status-${status}"
-              data-date="${date}"
-              data-prayer="${prayer}"
-              aria-label="${prayer}: ${statusLabels[status]}"
-            >${statusLabels[status]}</button>
-            <input
-              class="time-input"
-              type="time"
-              aria-label="Masa ${prayer}, ${date}"
-              data-time-date="${date}"
-              data-time-prayer="${prayer}"
-              value="${escapeHtml(time)}"
-            >
+              data-date="${date}" data-prayer="${prayer}">
+              ${LABELS[status]}
+            </button>
+            <input type="time" class="time-input"
+              aria-label="Masa ${prayer} ${date}"
+              data-date="${date}" data-prayer="${prayer}"
+              value="${escape(entry.prayed_at || "")}">
           </td>`;
         }).join("")}
       </tr>`);
     }
 
-    $("prayerTable").innerHTML = rows.join("");
+    $("prayerTable").innerHTML = html.join("");
 
-    $("prayerTable").querySelectorAll(".status-btn").forEach((button) => {
+    $("prayerTable").querySelectorAll(".status-btn").forEach(button => {
       button.addEventListener("click", async () => {
         const { date, prayer } = button.dataset;
-        const current = currentEntry(date, prayer);
-        const index = statusOrder.indexOf(current.status);
-        const nextStatus = statusOrder[(index + 1) % statusOrder.length];
-
-        await savePrayer(date, prayer, nextStatus, current.prayed_at || "");
+        const old = currentEntry(date, prayer);
+        const next = STATUSES[(STATUSES.indexOf(old.status) + 1) % STATUSES.length];
+        await savePrayer(date, prayer, next, old.prayed_at || "");
       });
     });
 
-    $("prayerTable").querySelectorAll(".time-input").forEach((input) => {
+    $("prayerTable").querySelectorAll(".time-input").forEach(input => {
       input.addEventListener("change", async () => {
-        const { timeDate: date, timePrayer: prayer } = input.dataset;
-        const current = currentEntry(date, prayer);
-
-        await savePrayer(date, prayer, current.status || "pending", input.value);
+        const { date, prayer } = input.dataset;
+        const old = currentEntry(date, prayer);
+        await savePrayer(date, prayer, old.status || "pending", input.value);
       });
     });
   }
 
   async function savePrayer(date, prayer, status, time) {
     if (!selectedUserId) {
-      showNotice("Pilih Ainaa atau Muaz dahulu.");
+      notice("Pilih Ainaa atau Muaz terlebih dahulu.");
       return;
     }
 
@@ -402,35 +340,35 @@
       prayed_at: time || null
     };
 
-    const { data, error } = await supabaseClient
-      .from("prayer_entries")
-      .upsert(payload, {
-        onConflict: "user_id,prayer_date,prayer_name"
-      })
-      .select("id,user_id,prayer_date,prayer_name,status,prayed_at")
-      .single();
+    try {
+      const { data, error } = await db
+        .from("prayer_entries")
+        .upsert(payload, {
+          onConflict: "user_id,prayer_date,prayer_name"
+        })
+        .select("id,user_id,prayer_date,prayer_name,status,prayed_at")
+        .single();
 
-    if (error) {
-      showNotice("Gagal menyimpan solat: " + error.message);
-      return;
+      if (error) throw error;
+
+      entries.set(key(date, prayer), data);
+      renderTable();
+      renderSummary();
+      clearNotice();
+    } catch (e) {
+      notice("Gagal menyimpan solat: " + e.message);
     }
-
-    entries.set(entryKey(date, prayer), data);
-    renderTable();
-    renderSummary();
-    hideNotice();
   }
 
   function renderSummary() {
-    const total = daysInMonth() * prayers.length;
     let done = 0;
     let missed = 0;
     let pending = 0;
 
     for (let day = 1; day <= daysInMonth(); day++) {
-      const date = dateKey(monthDate.getFullYear(), monthDate.getMonth(), day);
+      const date = dateKey(month.getFullYear(), month.getMonth(), day);
 
-      for (const prayer of prayers) {
+      for (const prayer of PRAYERS) {
         const status = currentEntry(date, prayer).status;
         if (status === "done") done++;
         else if (status === "missed") missed++;
@@ -438,83 +376,60 @@
       }
     }
 
-    const percent = total ? Math.round((done / total) * 100) : 0;
+    const total = daysInMonth() * PRAYERS.length;
+    const percent = Math.round((done / total) * 100);
 
     $("summary").innerHTML = `
-      <div class="summary-card">
-        <span class="summary-label">Selesai</span>
-        <strong>${done}</strong>
-      </div>
-      <div class="summary-card">
-        <span class="summary-label">Tertinggal</span>
-        <strong>${missed}</strong>
-      </div>
-      <div class="summary-card">
-        <span class="summary-label">Belum</span>
-        <strong>${pending}</strong>
-      </div>
-      <div class="summary-card">
-        <span class="summary-label">Kemajuan</span>
-        <strong>${percent}%</strong>
-      </div>
-    `;
+      <div class="summary-card"><span>Selesai</span><strong>${done}</strong></div>
+      <div class="summary-card"><span>Tertinggal</span><strong>${missed}</strong></div>
+      <div class="summary-card"><span>Belum</span><strong>${pending}</strong></div>
+      <div class="summary-card"><span>Kemajuan</span><strong>${percent}%</strong></div>`;
   }
 
   async function loadReflection() {
-    const notes = $("notes");
-    const improvement = $("improvement");
-    notes.value = "";
-    improvement.value = "";
-    setMessage("reflectionMessage", "");
+    $("notes").value = "";
+    $("improvement").value = "";
+    message("reflectionMessage", "");
 
-    // Refleksi kekal dikongsi mengikut reka bentuk asal.
-    const { data, error } = await supabaseClient
-      .from("monthly_reflections")
-      .select("*")
-      .eq("month_start", monthKey())
-      .maybeSingle();
+    try {
+      const { data, error } = await db
+        .from("monthly_reflections")
+        .select("*")
+        .eq("month_start", monthKey())
+        .maybeSingle();
 
-    if (error) {
-      setMessage("reflectionMessage", "Gagal memuatkan refleksi: " + error.message, true);
-      return;
-    }
+      if (error) throw error;
 
-    if (data) {
-      notes.value = data.notes || "";
-      improvement.value = data.improvement || "";
+      if (data) {
+        $("notes").value = data.notes || "";
+        $("improvement").value = data.improvement || "";
+      }
+    } catch (e) {
+      message("reflectionMessage", "Gagal memuat refleksi: " + e.message);
     }
   }
 
   async function saveReflection() {
-    if (savingReflection) return;
-    savingReflection = true;
-
     const button = $("saveReflection");
     button.disabled = true;
-    setMessage("reflectionMessage", "Sedang menyimpan...");
+    message("reflectionMessage", "Sedang menyimpan...");
 
     try {
-      const payload = {
-        month_start: monthKey(),
-        notes: $("notes").value.trim(),
-        improvement: $("improvement").value.trim()
-      };
-
-      const { error } = await supabaseClient
+      const { error } = await db
         .from("monthly_reflections")
-        .upsert(payload, { onConflict: "month_start" });
+        .upsert({
+          month_start: monthKey(),
+          notes: $("notes").value.trim(),
+          improvement: $("improvement").value.trim()
+        }, {
+          onConflict: "month_start"
+        });
 
       if (error) throw error;
-
-      setMessage("reflectionMessage", "Refleksi berjaya disimpan.");
-    } catch (error) {
-      setMessage(
-        "reflectionMessage",
-        "Gagal menyimpan refleksi: " + (error.message || error),
-        true
-      );
+      message("reflectionMessage", "Refleksi berjaya disimpan.");
+    } catch (e) {
+      message("reflectionMessage", "Gagal menyimpan refleksi: " + e.message);
     } finally {
-      savingReflection = false;
       button.disabled = false;
     }
   }
