@@ -183,19 +183,45 @@
     });
   }
 
-  async function login(event) {
-    event.preventDefault();
-    $("authMessage").textContent = "Sedang log masuk...";
+  
+async function login(event) {
+  event.preventDefault();
 
-    const { error } = await supabaseClient.auth.signInWithPassword({
-      email: $("email").value.trim(),
-      password: $("password").value
-    });
+  const message = $("authMessage");
+  const email = $("email").value.trim();
+  const password = $("password").value;
 
-    $("authMessage").textContent = error
-      ? `Tak berjaya log masuk: ${error.message}`
-      : "Berjaya log masuk.";
+  message.textContent = "Sedang log masuk...";
+  const submitButton = $("loginForm").querySelector('button[type="submit"]');
+  if (submitButton) submitButton.disabled = true;
+
+  try {
+    if (!supabaseClient) {
+      throw new Error("Supabase belum disediakan. Semak config.js.");
+    }
+
+    const result = await Promise.race([
+      supabaseClient.auth.signInWithPassword({ email, password }),
+      new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error("Sambungan mengambil masa terlalu lama. Semak internet dan tetapan Supabase.")),
+          15000
+        )
+      )
+    ]);
+
+    if (result.error) {
+      message.textContent = `Tak berjaya log masuk: ${result.error.message}`;
+    } else {
+      message.textContent = "Berjaya log masuk.";
+    }
+  } catch (error) {
+    message.textContent = `Ralat log masuk: ${error.message}`;
+  } finally {
+    if (submitButton) submitButton.disabled = false;
   }
+}
+
 
   async function logout() {
     await supabaseClient.auth.signOut();
