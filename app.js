@@ -98,7 +98,11 @@
       window.SUPABASE_ANON_KEY
     );
 
-    form?.addEventListener("submit", login);
+    form?.addEventListener("submit", function (event) {
+  event.preventDefault();
+  alert("BUTANG LOGIN BERFUNGSI");
+  login(event);
+});
     $("logoutBtn")?.addEventListener("click", logout);
     $("prevMonth")?.addEventListener("click", () => changeMonth(-1));
     $("nextMonth")?.addEventListener("click", () => changeMonth(1));
