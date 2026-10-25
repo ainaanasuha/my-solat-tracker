@@ -109,63 +109,67 @@
 
     const { data, error } = await supabaseClient.auth.getSession();
 
-    if (error) {
-      setAuthMessage(`Tak dapat menyemak sesi: ${error.message}`);
-      return;
-    }
-
-    if (data.session) {
-      currentUser = data.session.user;
-      await enterApp();
-    }
-
-    supabaseClient.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_OUT") {
-        currentUser = null;
-        selectedUserId = null;
-        $("appView")?.classList.add("hidden");
-        $("authCard")?.classList.remove("hidden");
-      }
-    });
+if (error) {
+  $("authCard").classList.remove("hidden");
+  $("authMessage").textContent = "Gagal menyemak sesi: " + error.message;
+} else if (data.session) {
+  currentUser = data.session.user;
+  await enterApp();
+} else {
+  $("authCard").classList.remove("hidden");
+}
+supabaseClient.auth.onAuthStateChange((event) => {
+  if (event === "SIGNED_OUT") {
+    currentUser = null;
+    $("appView").classList.add("hidden");
+    $("authCard").classList.remove("hidden");
   }
+});
 
   function setAuthMessage(message) {
     if ($("authMessage")) $("authMessage").textContent = message;
   }
 
   async function login(event) {
-    event.preventDefault();
+  event.preventDefault();
 
-    if (!supabaseClient) {
-      setAuthMessage("Supabase belum dikonfigurasi. Semak config.js.");
+  const button = $("loginForm").querySelector('button[type="submit"]');
+  button.disabled = true;
+  setAuthMessage("Sedang log masuk...");
+
+  try {
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
+      email: $("email").value.trim(),
+      password: $("password").value
+    });
+
+    if (error) {
+      setAuthMessage("Login gagal: " + error.message);
       return;
     }
 
-    const button = $("loginForm")?.querySelector('button[type="submit"]');
-    if (button) button.disabled = true;
-
-    setAuthMessage("Sedang log masuk...");
-
-    try {
-      const { data, error } = await supabaseClient.auth.signInWithPassword({
-        email: $("email").value.trim(),
-        password: $("password").value
-      });
-
-      if (error) {
-        setAuthMessage(`Tak berjaya log masuk: ${error.message}`);
-        return;
-      }
-
-      currentUser = data.user;
-      setAuthMessage("Login berjaya.");
-      await enterApp();
-    } catch (error) {
-      setAuthMessage(`Ralat login: ${error.message}`);
-    } finally {
-      if (button) button.disabled = false;
+    if (!data.user) {
+      setAuthMessage("Login belum berjaya. Supabase tidak memulangkan maklumat pengguna.");
+      return;
     }
+
+    currentUser = data.user;
+    setAuthMessage("Login berjaya. Membuka rekod...");
+
+    await enterApp();
+
+  } catch (err) {
+    setAuthMessage("Ralat: " + (err?.message || String(err)));
+    console.error("Ralat login:", err);
+  } finally {
+    button.disabled = false;
   }
+}
+
+function setAuthMessage(message) {
+  const el = $("authMessage");
+  if (el) el.textContent = message;
+}
 
   async function logout() {
     const { error } = await supabaseClient.auth.signOut();
